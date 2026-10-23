@@ -2,6 +2,9 @@ CMP425 / CMP501
 Lab 5 TCP selector example - by Andrei Boiko
 Built using SFML Sockets
 
+### Name: Suryaveer Bhandari
+### Student Number: 2605665
+
 ### Key changes from Lab 3
 - Updated Game class to handle texture loading once at initialisation.
 - All textures are now passed to Tank as pointers.
