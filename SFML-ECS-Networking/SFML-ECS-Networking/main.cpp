@@ -17,7 +17,6 @@
 int main() {
 	bool is_observer = false;
 	unsigned short observer_port = 53000;
-	unsigned short player_port = sf::Socket::AnyPort;
 
 	Utils::printMsg("Game startup...");
 
@@ -57,11 +56,17 @@ int main() {
 	// Socket for communication with observer
 	std::unique_ptr<sf::TcpSocket> player_socket = std::make_unique<sf::TcpSocket>();
 
-	auto port = is_observer ? observer_port : player_port;
-	listener.setBlocking(false); // set listener to non-blocking mode so we can keep checking for connections
+	// Only the Observer listens for connections. Players connect to it, so they don't need a listener.
+	if (is_observer) {
+		listener.setBlocking(false); // set listener to non-blocking mode so we can keep checking for connections
 
-	if (listener.listen(port) == sf::Socket::Status::Error) {
-		// FIXME: we need to handle the error and make sure we don't try to accept, etc. if the listen fails.
+		// Without a listener the Observer can never accept a Player, so there is no point carrying on.
+		if (listener.listen(observer_port) != sf::Socket::Status::Done) {
+			Utils::printMsg("Could not listen on port " + std::to_string(observer_port)
+				+ ". Is another Observer already running?", error);
+			return 1;
+		}
+		Utils::printMsg("Listening on port " + std::to_string(observer_port));
 	}
 
 	// Clock for timing the 'dt' value
@@ -76,6 +81,7 @@ int main() {
 	float game_speed = 1.0f;
 	float send_rate = 0.1f;
 	float reconnect_delay = 1.f;
+	float reconnect_timer = reconnect_delay; // Start "due", so the first attempt happens straight away.
 	float send_timer = 1.f;
 	bool is_connected = false;
 
@@ -98,6 +104,7 @@ int main() {
 		// Calculate dt.
 		float dt = clock.restart().asSeconds() * game_speed;
 		send_timer += dt; // Count how much time has passed.
+		reconnect_timer += dt;
 		// Handle window events (e.g. key press).
 		while (const std::optional event = window.pollEvent()) {
 			if (event->is<sf::Event::Closed>()) {
@@ -230,32 +237,37 @@ int main() {
 			// If we're not connected to the observer, try to connect.
 			// We want the socket in non-blocking mode, so if the connection fails, we just try again next time.
 			if (!is_connected) {
-				Utils::printMsg("Attempting connection to observer...");
-				// SFML TCP sockets are fiddly when it comes to non-blocking connect calls,
-				// we could specify a very small delay timeout in the blocking mode, but this would cause lag while it tries.
-				// Ideally, we just handle connection in blocking mode, and wait for a successful connection before we continue.
-				// So switch to blocking mode for each attempt (we go non-blocking again once connected).
-				player_socket->setBlocking(true);
-				sf::Socket::Status status = player_socket->connect(sf::IpAddress::LocalHost, observer_port);
-				if (status == sf::Socket::Status::Done) {
-					Utils::printMsg("Connected!", MessageType::success);
-					is_connected = true;
-					// From now on a send must never hold up the game loop.
-					player_socket->setBlocking(false);
-					// Tell the Observer where our tank is as soon as we are connected.
-					force_send = true;
-					// Add new tank with blue body and black barrel at the centre of the window.
-					// Only the first time: if we reconnect later we keep the same tank. It is the first
-					// tank added, so its ID is 0 (the local-tank code in Game relies on that).
-					if (!local_tank_added) {
-						game.AddTank("body_blue", "barrel_black", { 320, 240 });
-						local_tank_added = true;
+				// Only try once per reconnect_delay, instead of on every single frame.
+				if (reconnect_timer >= reconnect_delay) {
+					reconnect_timer = 0;
+
+					Utils::printMsg("Attempting connection to observer...");
+					// SFML TCP sockets are fiddly when it comes to non-blocking connect calls,
+					// we could specify a very small delay timeout in the blocking mode, but this would cause lag while it tries.
+					// Ideally, we just handle connection in blocking mode, and wait for a successful connection before we continue.
+					// So switch to blocking mode for each attempt (we go non-blocking again once connected).
+					player_socket->setBlocking(true);
+					sf::Socket::Status status = player_socket->connect(sf::IpAddress::LocalHost, observer_port);
+					if (status == sf::Socket::Status::Done) {
+						Utils::printMsg("Connected!", MessageType::success);
+						is_connected = true;
+						// From now on a send must never hold up the game loop.
+						player_socket->setBlocking(false);
+						// Tell the Observer where our tank is as soon as we are connected.
+						force_send = true;
+						// Add new tank with blue body and black barrel at the centre of the window.
+						// Only the first time: if we reconnect later we keep the same tank. It is the first
+						// tank added, so its ID is 0 (the local-tank code in Game relies on that).
+						if (!local_tank_added) {
+							game.AddTank("body_blue", "barrel_black", { 320, 240 });
+							local_tank_added = true;
+						}
 					}
+					else {
+						Utils::printMsg("Failed to connect to observer. Will try again later.", MessageType::warning);
+					}
+					send_timer = 0;
 				}
-				else {
-					Utils::printMsg("Failed to connect to observer. Will try again later.", MessageType::warning);
-				}
-				send_timer = 0;
 			}
 			else {
 				game.Update(dt);

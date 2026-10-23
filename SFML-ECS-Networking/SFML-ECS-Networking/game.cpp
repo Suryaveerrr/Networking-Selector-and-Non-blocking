@@ -24,39 +24,43 @@ void Game::LoadTextures() {
 
 void Game::HandleEvents(const std::optional<sf::Event> event)
 {
+	// The Player's tank is only added once it has connected to the Observer, so before that
+	// there is nothing to control. (It is the first tank added, so its ID is 0.)
+	auto local_tank = tanks.find(0);
+	if (local_tank == tanks.end())
+		return;
+	Tank& tank = *local_tank->second;
+
 	// Handle key press events passed from window.
 	if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>()) {
 		if (keyPressed->scancode == sf::Keyboard::Scancode::W) {
-			tanks.at(0)->isMoving.forward = true;
-			tanks.at(0)->isMoving.backward = false;
+			tank.isMoving.forward = true;
+			tank.isMoving.backward = false;
 		}
 		else if (keyPressed->scancode == sf::Keyboard::Scancode::S) {
-			tanks.at(0)->isMoving.forward = false;
-			tanks.at(0)->isMoving.backward = true;
+			tank.isMoving.forward = false;
+			tank.isMoving.backward = true;
 		}
 		if (keyPressed->scancode == sf::Keyboard::Scancode::A) {
-			tanks.at(0)->isMoving.left = true;
-			tanks.at(0)->isMoving.right = false;
+			tank.isMoving.left = true;
+			tank.isMoving.right = false;
 		}
 		else if (keyPressed->scancode == sf::Keyboard::Scancode::D) {
-			tanks.at(0)->isMoving.left = false;
-			tanks.at(0)->isMoving.right = true;
-		}
-		if (keyPressed->scancode == sf::Keyboard::Scancode::D) {
-
+			tank.isMoving.left = false;
+			tank.isMoving.right = true;
 		}
 	}
 
 	// Handle key release events passed from window.
 	else if (const auto* keyReleased = event->getIf<sf::Event::KeyReleased>()) {
 		if (keyReleased->scancode == sf::Keyboard::Scancode::W)
-			tanks.at(0)->isMoving.forward = false;
+			tank.isMoving.forward = false;
 		if (keyReleased->scancode == sf::Keyboard::Scancode::S)
-			tanks.at(0)->isMoving.backward = false;
+			tank.isMoving.backward = false;
 		if (keyReleased->scancode == sf::Keyboard::Scancode::A)
-			tanks.at(0)->isMoving.left = false;
+			tank.isMoving.left = false;
 		if (keyReleased->scancode == sf::Keyboard::Scancode::D)
-			tanks.at(0)->isMoving.right = false;
+			tank.isMoving.right = false;
 	}
 }
 
