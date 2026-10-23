@@ -14,19 +14,24 @@ Tank::Tank(std::shared_ptr<sf::Texture> bodyTexture, std::shared_ptr<sf::Texture
 	body->setPosition(position);
 	barrel->setPosition(body->getPosition());
 
-	// Set default barrel rotation to match body rotation.
-	// FIXME: for actual tank game, we would have barrel rotated independently of the body.
+	// The barrel starts out matching the body, but is rotated independently from then on.
 	body->setRotation(bodyRotation);
-	barrel->setRotation(body->getRotation());
+	barrel->setRotation(barrelRotation);
 }
 
 void Tank::Update(float dt)
 {
-	// Update rotation angle based on input.
+	// Update body rotation angle based on input.
 	if (isMoving.left)
 		bodyRotation -= sf::degrees(rotationSpeed * dt);
 	else if (isMoving.right)
 		bodyRotation += sf::degrees(rotationSpeed * dt);
+
+	// Update barrel rotation independently of the body.
+	if (isBarrelRotating.left)
+		barrelRotation -= sf::degrees(rotationSpeed * dt);
+	else if (isBarrelRotating.right)
+		barrelRotation += sf::degrees(rotationSpeed * dt);
 
 	// Calculate direction vector from angle of rotation.
 	sf::Vector2f body_direction = {
@@ -40,16 +45,16 @@ void Tank::Update(float dt)
 	else if (isMoving.backward)
 		position += body_direction * movementSpeed * dt;
 
-	// Apply new rotation to tank body and barrel.
+	// Apply new rotations to tank body and barrel (independently).
 	body->setRotation(bodyRotation);
-	barrel->setRotation(bodyRotation);
+	barrel->setRotation(barrelRotation);
 
 	// Apply new position to tank body and barrel.
 	body->setPosition(position);
 	barrel->setPosition(position);
 }
 
-const void Tank::Render(sf::RenderWindow &window) {
-		window.draw(*body);
-		window.draw(*barrel);
+const void Tank::Render(sf::RenderWindow& window) {
+	window.draw(*body);
+	window.draw(*barrel);
 }

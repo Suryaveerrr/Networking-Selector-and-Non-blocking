@@ -4,10 +4,10 @@ Game::Game()
 {
 	LoadTextures();
 	// Initialis sprite for background.
-	background = std::make_unique<sf::Sprite>(*textures["ground_sand"]);
+	background = std::make_unique<sf::Sprite>(*textures.at("ground_sand"));
 	background->setTextureRect(sf::IntRect({ 0, 0 }, { 640, 480 }));
 
-	// We're not loading the tank by default any more.
+	// We're not loading any tanks by default.
 }
 
 void Game::LoadTextures() {
@@ -22,14 +22,28 @@ void Game::LoadTextures() {
 	textures["body_green"] = std::make_shared<sf::Texture>("Assets/greenTank.png");
 }
 
+bool Game::IsValidColour(const std::string& colour)
+{
+	return colour == "blue" || colour == "green" || colour == "black";
+}
+
+std::unique_ptr<Tank> Game::CreateTank(const std::string& colour, sf::Vector2f position)
+{
+	// The colour can come off the network, so never look up a texture we don't have.
+	std::string safe_colour = IsValidColour(colour) ? colour : "blue";
+
+	std::unique_ptr<Tank> tank = std::make_unique<Tank>(textures.at("body_" + safe_colour), textures.at("barrel_" + safe_colour));
+	tank->position = position;
+	tank->Update(0.f); // Apply the position to the sprites straight away.
+	return tank;
+}
+
 void Game::HandleEvents(const std::optional<sf::Event> event)
 {
-	// The Player's tank is only added once it has connected to the Observer, so before that
-	// there is nothing to control. (It is the first tank added, so its ID is 0.)
-	auto local_tank = tanks.find(0);
-	if (local_tank == tanks.end())
+	// Only a Player has a tank to control.
+	if (!localTank)
 		return;
-	Tank& tank = *local_tank->second;
+	Tank& tank = *localTank;
 
 	// Handle key press events passed from window.
 	if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>()) {
@@ -49,6 +63,14 @@ void Game::HandleEvents(const std::optional<sf::Event> event)
 			tank.isMoving.left = false;
 			tank.isMoving.right = true;
 		}
+		if (keyPressed->scancode == sf::Keyboard::Scancode::Q) {
+			tank.isBarrelRotating.left = true;
+			tank.isBarrelRotating.right = false;
+		}
+		else if (keyPressed->scancode == sf::Keyboard::Scancode::E) {
+			tank.isBarrelRotating.left = false;
+			tank.isBarrelRotating.right = true;
+		}
 	}
 
 	// Handle key release events passed from window.
@@ -61,48 +83,53 @@ void Game::HandleEvents(const std::optional<sf::Event> event)
 			tank.isMoving.left = false;
 		if (keyReleased->scancode == sf::Keyboard::Scancode::D)
 			tank.isMoving.right = false;
+		if (keyReleased->scancode == sf::Keyboard::Scancode::Q)
+			tank.isBarrelRotating.left = false;
+		if (keyReleased->scancode == sf::Keyboard::Scancode::E)
+			tank.isBarrelRotating.right = false;
 	}
 }
 
 void Game::Update(float dt)
 {
-	// Update every tank (this used to update tank 0 over and over, whatever the loop index was).
-	for (auto& entry : tanks) {
-		entry.second->Update(dt);
-	}
-}
-
-// Tank data includes the tank's ID, so the Observer can update the right tank for each player.
-void Game::NetworkUpdate(float dt, TankMessage data) {
-	auto it = tanks.find(data.id);
-	if (it == tanks.end())
-		return; // No tank with that ID (it may have just been removed), so ignore the update.
-
-	// Force position updates from network data.
-	it->second->position = { data.x, data.y };
-	// Update tank with new position.
-	// NOTE: This assumets no inputs were detected and so the tank will only move according to 
-	// network updates. This is not ideal and prone to unexpected behaviour if game is extended
-	// to be fully multiplayer. 
-	it->second->Update(dt);
+	if (localTank)
+		localTank->Update(dt);
 }
 
 void Game::Render(sf::RenderWindow& window)
 {
 	window.draw(*background);
+	// The other players first, so the Player's own tank is drawn on top.
 	for (auto& entry : tanks) {
 		entry.second->Render(window);
 	}
+	if (localTank)
+		localTank->Render(window);
 }
 
-int Game::AddTank(std::string body_tex, std::string barrel_tex, sf::Vector2f position)
+void Game::AddLocalTank(const std::string& colour, sf::Vector2f position)
 {
-	std::unique_ptr<Tank> tank = std::make_unique<Tank>(Tank(textures[body_tex], textures[barrel_tex]));
-	tank->position = position;
+	localTank = CreateTank(colour, position);
+}
 
-	int id = nextTankId++;
-	tanks[id] = std::move(tank);
-	return id;
+TankMessage Game::GetNetworkUpdate()
+{
+	TankMessage message;
+	if (!localTank)
+		return message;
+
+	// The ID doesn't matter for the local tank: the Observer works out who an update came from.
+	message.x = localTank->position.x;
+	message.y = localTank->position.y;
+	message.rotation = localTank->bodyRotation.asDegrees();
+	message.barrelRotation = localTank->barrelRotation.asDegrees();
+	return message;
+}
+
+void Game::AddTank(int id, const std::string& colour, sf::Vector2f position)
+{
+	// If there is already a tank with this ID it is replaced.
+	tanks[id] = CreateTank(colour, position);
 }
 
 void Game::RemoveTank(int id)
@@ -110,9 +137,22 @@ void Game::RemoveTank(int id)
 	tanks.erase(id);
 }
 
-TankMessage Game::GetNetworkUpdate()
+void Game::ClearTanks()
 {
-	// This is hardcoded for the local tan for Player.
-	// First value can be anything as we don't care about player ID for local Player updates.
-	return { 0, tanks.at(0)->position.x, tanks.at(0)->position.y };
+	tanks.clear();
+}
+
+// Tank data includes the tank's ID, so the right tank gets updated for each player.
+void Game::NetworkUpdate(float dt, TankMessage data) {
+	auto it = tanks.find(data.id);
+	if (it == tanks.end())
+		return; // No tank with that ID (it may have just been removed), so ignore the update.
+
+	// Force position and rotations from network data.
+	it->second->position = { data.x, data.y };
+	it->second->bodyRotation = sf::degrees(data.rotation);
+	it->second->barrelRotation = sf::degrees(data.barrelRotation);
+	// Update tank so the new values are applied to its sprites.
+	// NOTE: No inputs are ever set on these tanks, so they only move according to network updates.
+	it->second->Update(dt);
 }
