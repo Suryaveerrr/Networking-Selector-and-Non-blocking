@@ -79,6 +79,18 @@ int main() {
 	float send_timer = 1.f;
 	bool is_connected = false;
 
+	// Player: the packet currently being sent. A non-blocking TCP send may only accept part of a
+	// packet at a time, so we keep the same packet around until it has fully gone out.
+	sf::Packet pending_packet;
+	bool send_pending = false;
+	// Player: the Player's tank is only added once, the first time we connect.
+	bool local_tank_added = false;
+	// Player: the last position we sent, so we only send again when it changes.
+	TankMessage last_sent = {};
+	// Player: send once straight after (re)connecting, even if nothing has changed. A fresh Observer
+	// starts the tank at the centre, so it needs to be told where the tank really is.
+	bool force_send = true;
+
 	// Selector for handling multiple connections (Observer only).
 	sf::SocketSelector selector;
 
@@ -145,6 +157,8 @@ int main() {
 			}
 
 			// Check which connections have some data waiting to be received from sockets.
+			// The timeout is 0, so this only polls and never holds up the frame. Now that Players only
+			// send when something changes, this returns false whenever everyone is standing still.
 			if (selector.wait(sf::seconds(0.f))) {
 				for (auto& connection : player_connections) {
 					// Check the state first: a disconnected socket has been removed from the
@@ -220,14 +234,23 @@ int main() {
 				// SFML TCP sockets are fiddly when it comes to non-blocking connect calls,
 				// we could specify a very small delay timeout in the blocking mode, but this would cause lag while it tries.
 				// Ideally, we just handle connection in blocking mode, and wait for a successful connection before we continue.
+				// So switch to blocking mode for each attempt (we go non-blocking again once connected).
+				player_socket->setBlocking(true);
 				sf::Socket::Status status = player_socket->connect(sf::IpAddress::LocalHost, observer_port);
 				if (status == sf::Socket::Status::Done) {
 					Utils::printMsg("Connected!", MessageType::success);
 					is_connected = true;
+					// From now on a send must never hold up the game loop.
+					player_socket->setBlocking(false);
+					// Tell the Observer where our tank is as soon as we are connected.
+					force_send = true;
 					// Add new tank with blue body and black barrel at the centre of the window.
-					// The Player's only tank is the first one added, so its ID is 0 (the local-tank
-					// code in Game relies on that).
-					game.AddTank("body_blue", "barrel_black", { 320, 240 });
+					// Only the first time: if we reconnect later we keep the same tank. It is the first
+					// tank added, so its ID is 0 (the local-tank code in Game relies on that).
+					if (!local_tank_added) {
+						game.AddTank("body_blue", "barrel_black", { 320, 240 });
+						local_tank_added = true;
+					}
 				}
 				else {
 					Utils::printMsg("Failed to connect to observer. Will try again later.", MessageType::warning);
@@ -236,26 +259,61 @@ int main() {
 			}
 			else {
 				game.Update(dt);
-				// Get data structure from game, containing update message.
-				TankMessage message = game.GetNetworkUpdate();
-				// Translate our messgage struct to sf::Packet (very rudimentary conversion).
-				packet << message.x << message.y;
 
-				// Send messages only as often as the send rate allows.
-				if (send_timer >= send_rate) {
-					sf::Socket::Status status = player_socket->send(packet);
-					// FIXME: Send can fail, check for errors and adjust logic accordingly.
+				sf::Socket::Status status = sf::Socket::Status::Done;
+				bool attempted_send = false;
+
+				if (send_pending) {
+					// An earlier packet only partly went out. TCP is a byte stream, so that packet must be
+					// finished before anything else is sent. Sending the same, unchanged packet again carries
+					// on from where SFML left off, because the packet remembers how much has gone already.
+					status = player_socket->send(pending_packet);
+					attempted_send = true;
+				}
+				else if (send_timer >= send_rate) {
+					// At most one update per send_rate, and only if there is something new to say.
+					// Get data structure from game, containing update message.
+					TankMessage message = game.GetNetworkUpdate();
+
+					bool changed = force_send || message.x != last_sent.x || message.y != last_sent.y;
+					if (changed) {
+						// Translate our messgage struct to sf::Packet (very rudimentary conversion).
+						// Start from a brand new packet so no old send progress can carry over.
+						pending_packet = sf::Packet();
+						pending_packet << message.x << message.y;
+
+						status = player_socket->send(pending_packet);
+						attempted_send = true;
+						last_sent = message;
+						force_send = false;
+						// Reset timer after starting to send the message. If nothing changed we leave
+						// it running, so the next change is sent on the very next frame.
+						send_timer = 0;
+					}
+				}
+
+				if (attempted_send) {
 					if (status == sf::Socket::Status::Done) {
+						send_pending = false;
 						Utils::printMsg("Sent message to: "
 							+ player_socket->getRemoteAddress().value().toString()
 							+ ":"
 							+ std::to_string(observer_port));
 					}
-					else {
-						Utils::printMsg("Failed to send message to Observer", error);
+					else if (status == sf::Socket::Status::Partial || status == sf::Socket::Status::NotReady) {
+						// Only part of the packet (Partial) or none of it (NotReady, the send buffer is full)
+						// has gone out. Keep the packet and carry on with it next frame.
+						send_pending = true;
+						Utils::printMsg("Send incomplete, will carry on next frame.", MessageType::warning);
 					}
-					// Reset timer after sending the message
-					send_timer = 0;
+					else {
+						// Disconnected or Error: the Observer has gone. Close the socket and go back to
+						// trying to connect, instead of failing to send on every frame from now on.
+						Utils::printMsg("Lost connection to Observer, will try to reconnect.", error);
+						player_socket->disconnect();
+						is_connected = false;
+						send_pending = false;
+					}
 				}
 			}
 		}
