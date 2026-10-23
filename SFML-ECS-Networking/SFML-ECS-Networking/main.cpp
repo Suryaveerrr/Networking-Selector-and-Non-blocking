@@ -119,7 +119,10 @@ int main() {
 					+ std::to_string(socket->getRemotePort()));
 				
 				// Add connection the vector.
-				player_connections.push_back({std::move(socket)});
+				player_connections.push_back({ std::move(socket) });
+				// Accepted sockets are blocking by default. Make this one non-blocking, so a receive
+				// with nothing to read returns NotReady instead of freezing the whole Observer.
+				player_connections.back().socket->setBlocking(false);
 				selector.add(*player_connections.back().socket); // Add to persistent selector
 				// Set the deafult connection state to NotReady.
 				player_connections.back().state = NotReady;
