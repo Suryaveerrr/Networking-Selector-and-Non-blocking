@@ -17,7 +17,7 @@ void Game::LoadTextures() {
 	textures["barrel_black"] = std::make_shared<sf::Texture>("Assets/blackBarrel.png");
 	textures["body_black"] = std::make_shared<sf::Texture>("Assets/blackTank.png");
 	textures["barrel_blue"] = std::make_shared<sf::Texture>("Assets/blueBarrel.png");
-	textures["body_blue"] =	std::make_shared<sf::Texture>("Assets/blueTank.png");
+	textures["body_blue"] = std::make_shared<sf::Texture>("Assets/blueTank.png");
 	textures["barrel_green"] = std::make_shared<sf::Texture>("Assets/greenBarrel.png");
 	textures["body_green"] = std::make_shared<sf::Texture>("Assets/greenTank.png");
 }
@@ -62,40 +62,53 @@ void Game::HandleEvents(const std::optional<sf::Event> event)
 
 void Game::Update(float dt)
 {
-	for (int i = 0; i < tanks.size(); i++) {
-		tanks.at(0)->Update(dt);
+	// Update every tank (this used to update tank 0 over and over, whatever the loop index was).
+	for (auto& entry : tanks) {
+		entry.second->Update(dt);
 	}
 }
 
-// Tank data now includes player id for Observer to update multiple players.
+// Tank data includes the tank's ID, so the Observer can update the right tank for each player.
 void Game::NetworkUpdate(float dt, TankMessage data) {
+	auto it = tanks.find(data.id);
+	if (it == tanks.end())
+		return; // No tank with that ID (it may have just been removed), so ignore the update.
+
 	// Force position updates from network data.
-	tanks.at(data.id)->position = { data.x, data.y};
+	it->second->position = { data.x, data.y };
 	// Update tank with new position.
 	// NOTE: This assumets no inputs were detected and so the tank will only move according to 
 	// network updates. This is not ideal and prone to unexpected behaviour if game is extended
 	// to be fully multiplayer. 
-	tanks.at(data.id)->Update(dt);
+	it->second->Update(dt);
 }
 
 void Game::Render(sf::RenderWindow& window)
 {
 	window.draw(*background);
-	for (int i = 0; i < tanks.size(); i++) {
-		tanks.at(i)->Render(window);
+	for (auto& entry : tanks) {
+		entry.second->Render(window);
 	}
 }
 
-void Game::AddTank(std::string body_tex, std::string barrel_tex, sf::Vector2f position)
+int Game::AddTank(std::string body_tex, std::string barrel_tex, sf::Vector2f position)
 {
 	std::unique_ptr<Tank> tank = std::make_unique<Tank>(Tank(textures[body_tex], textures[barrel_tex]));
 	tank->position = position;
-	tanks.push_back(std::move(tank));
+
+	int id = nextTankId++;
+	tanks[id] = std::move(tank);
+	return id;
+}
+
+void Game::RemoveTank(int id)
+{
+	tanks.erase(id);
 }
 
 TankMessage Game::GetNetworkUpdate()
 {
 	// This is hardcoded for the local tan for Player.
 	// First value can be anything as we don't care about player ID for local Player updates.
-	return {0, tanks.at(0)->position.x, tanks.at(0)->position.y};
+	return { 0, tanks.at(0)->position.x, tanks.at(0)->position.y };
 }

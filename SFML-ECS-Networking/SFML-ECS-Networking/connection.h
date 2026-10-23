@@ -1,14 +1,18 @@
 #pragma once
 
+#include <memory>
 #include <SFML\Network.hpp>
 
-enum ConnState {NotReady, Ready, Disconnected};
+enum ConnState { NotReady, Ready, Disconnected };
 
-// Fixme:: ideally we should link specific tank/character to each connection,
-// rather than assuming the order in which connections are made is the same as
-// the order in which tanks/characters are stored in the game.
+// Links a player's network connection to the tank it controls.
 struct Connection
 {
 	std::unique_ptr<sf::TcpSocket> socket;
 	ConnState state = Disconnected;
+
+	// ID of this player's tank in the Game (the value returned by Game::AddTank).
+	// We use this instead of assuming the connection's position in the vector matches
+	// the tank's position, because connections get removed and the order changes.
+	int tankId = -1;
 };

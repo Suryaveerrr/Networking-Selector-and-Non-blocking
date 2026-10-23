@@ -1,5 +1,6 @@
 #include <SFML\Graphics.hpp>
 #include <SFML\Network.hpp>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include "game.h"
@@ -130,7 +131,9 @@ int main() {
 				// Add new tank with blue body and black barrel at the centre of the window.
 				// FIXME: Ideally we should wait until the first receive gets some data about the trank
 				// position and colour before we add it to the Observer's game.
-				game.AddTank("body_blue", "barrel_black", { 320, 240 });
+				// Remember the tank's ID in the connection, so this player's updates always go to
+				// this player's tank, whatever order connections come and go in.
+				player_connections.back().tankId = game.AddTank("body_blue", "barrel_black", { 320, 240 });
 			}
 
 			// Start every live connection as NotReady each frame. This way a state can never go
@@ -151,9 +154,6 @@ int main() {
 				}
 			}
 
-			// FIXME: we never remove disconnected players from the vector of connections. This will
-			// cause us to continue to update and draw them. (Disconnects are now detected and
-			// handled below, but the tank still needs removing from the game.)
 			for (int i = 0; i < player_connections.size(); i++) {
 				if (player_connections.at(i).state != Ready)
 					continue;
@@ -166,7 +166,8 @@ int main() {
 						+ std::to_string(player_connections.at(i).socket->getRemotePort()));
 
 					TankMessage message;
-					message.id = i;
+					// The connection knows which tank is its own, so we don't rely on its position in the vector.
+					message.id = player_connections.at(i).tankId;
 					// Read recieved data into TankMessage struct. Reading can fail if the packet
 					// is too short, so check it before using the values.
 					if (packet >> message.x >> message.y) {
@@ -174,7 +175,7 @@ int main() {
 						game.NetworkUpdate(dt, message);
 					}
 					else {
-						Utils::printMsg("Malformed packet from player " + std::to_string(i) + ", ignoring it.", warning);
+						Utils::printMsg("Malformed packet from player " + std::to_string(message.id) + ", ignoring it.", warning);
 					}
 				}
 				else if (status == sf::Socket::Status::Disconnected || status == sf::Socket::Status::Error) {
@@ -195,10 +196,20 @@ int main() {
 					selector.remove(*player_connections.at(i).socket);
 					player_connections.at(i).socket->disconnect();
 					player_connections.at(i).state = Disconnected;
+
+					// Remove this player's tank from the game, so it is no longer updated or drawn.
+					game.RemoveTank(player_connections.at(i).tankId);
 				}
 				// NotReady and Partial need nothing from us: Partial means only part of a packet
 				// has arrived, and SFML keeps what it has until the rest shows up on a later receive.
 			}
+
+			// Disconnected players' sockets are closed and out of the selector, and their tanks are
+			// gone from the game, so now it is safe to drop their connections from the vector too.
+			player_connections.erase(
+				std::remove_if(player_connections.begin(), player_connections.end(),
+					[](const Connection& connection) { return connection.state == Disconnected; }),
+				player_connections.end());
 		}
 		else
 		{
@@ -214,6 +225,8 @@ int main() {
 					Utils::printMsg("Connected!", MessageType::success);
 					is_connected = true;
 					// Add new tank with blue body and black barrel at the centre of the window.
+					// The Player's only tank is the first one added, so its ID is 0 (the local-tank
+					// code in Game relies on that).
 					game.AddTank("body_blue", "barrel_black", { 320, 240 });
 				}
 				else {
